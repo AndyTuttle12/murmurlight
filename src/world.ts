@@ -24,6 +24,15 @@ export interface Sleeper {
 export interface Stray { x: number; y: number; hx: number; hy: number; ph: number; alive: boolean }
 
 export const SLEEPER_COUNT = 7;
+
+// Currents live on a coarser grid than the stone (they are smooth, so 32-unit cells are plenty).
+export const FCELL = 32;
+export const FG = WORLD / FCELL;
+export const CURRENT_SPEED = 170;       // peak flow along a current's spine, world units per second
+export const TIDE_PERIOD = 14;          // seconds per breath of the cave
+
+// The whole cave breathes together: currents swell and ebb on one slow tide.
+export const tideAt = (t: number) => 0.6 + 0.4 * Math.sin((t / TIDE_PERIOD) * Math.PI * 2);
 const NEEDS = [5, 8, 12, 17, 23, 30, 38];
 
 export class World {
@@ -34,6 +43,9 @@ export class World {
   sleepers: Sleeper[] = [];
   strays: Stray[] = [];
   edges: [number, number][] = [];
+  readonly flow = new Float32Array(FG * FG * 2);   // current velocity (x, y) per cell, at full tide
+  currents: { x: number; y: number }[][] = [];     // spines of the tunnels that flow, in flow direction
+  private spines: { x: number; y: number }[][] = [];
   private rng: Rng;
 
   constructor(seed: number) {
@@ -60,6 +72,19 @@ export class World {
     out.y = this.sample(x, y + e) - this.sample(x, y - e);
     const l = Math.hypot(out.x, out.y) || 1;
     out.x /= l; out.y /= l;
+  }
+
+  // Bilinear sample of the current field at full tide.
+  flowAt(x: number, y: number, out: { x: number; y: number }) {
+    const gx = x / FCELL - 0.5, gy = y / FCELL - 0.5;
+    const ix = Math.floor(gx), iy = Math.floor(gy);
+    out.x = 0; out.y = 0;
+    if (ix < 0 || iy < 0 || ix >= FG - 1 || iy >= FG - 1) return out;
+    const fx = gx - ix, fy = gy - iy, f = this.flow;
+    const w = [(1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy];
+    const idx = [iy * FG + ix, iy * FG + ix + 1, (iy + 1) * FG + ix, (iy + 1) * FG + ix + 1];
+    for (let k = 0; k < 4; k++) { out.x += f[idx[k] * 2] * w[k]; out.y += f[idx[k] * 2 + 1] * w[k]; }
+    return out;
   }
 
   isReachable(x: number, y: number): boolean {
@@ -120,7 +145,7 @@ export class World {
       }
     }
     this.edges = edges;
-    for (const [a, b] of edges) this.carveTunnel(nodes[a], nodes[b]);
+    for (const [a, b] of edges) this.spines.push(this.carveTunnel(nodes[a], nodes[b]));
 
     for (let i = 1; i < N; i++) this.carveCircle(nodes[i].x, nodes[i].y, 250);
     this.carveCircle(this.start.x, this.start.y, 300);
@@ -148,6 +173,52 @@ export class World {
       clusters++;
     }
 
+    // 7. Currents. Drawn last so adding them left every older seed's cave, sleepers and strays unchanged.
+    //    Tunnels leaving home stay still so the opening is calm.
+    const flowing = edges.map((e, i) => ({ e, i })).filter(({ e }) => e[0] !== 0 && e[1] !== 0);
+    const rolls = flowing.map(() => rng());
+    flowing.forEach(({ i }, k) => {
+      // Roughly half the tunnels flow, and never fewer than two, so every cave has water to ride.
+      const rank = rolls.filter((v) => v < rolls[k]).length;
+      if (rolls[k] < 0.45 || rank < 2) {
+        const spine = rng() < 0.5 ? this.spines[i] : [...this.spines[i]].reverse();
+        this.currents.push(spine);
+        this.paintCurrent(spine);
+      }
+    });
+    this.smoothFlow();
+  }
+
+  // Write the spine's direction into the flow grid, strongest along the middle of the tunnel.
+  private paintCurrent(spine: { x: number; y: number }[]) {
+    const f = this.flow, R = 150;
+    for (let i = 1; i < spine.length - 1; i++) {
+      const a = spine[i - 1], b = spine[i + 1], p = spine[i];
+      const tx = b.x - a.x, ty = b.y - a.y, tl = Math.hypot(tx, ty) || 1;
+      // Ease in and out at the ends so a current gathers and releases rather than switching on.
+      const u = i / (spine.length - 1), ends = smoothstep(0, 0.12, u) * smoothstep(1, 0.88, u);
+      const g0x = Math.max(0, Math.floor((p.x - R) / FCELL)), g1x = Math.min(FG - 1, Math.ceil((p.x + R) / FCELL));
+      const g0y = Math.max(0, Math.floor((p.y - R) / FCELL)), g1y = Math.min(FG - 1, Math.ceil((p.y + R) / FCELL));
+      for (let gy = g0y; gy <= g1y; gy++) for (let gx = g0x; gx <= g1x; gx++) {
+        const d = Math.hypot((gx + 0.5) * FCELL - p.x, (gy + 0.5) * FCELL - p.y);
+        const k = smoothstep(R, R * 0.35, d) * ends * CURRENT_SPEED;
+        const j = (gy * FG + gx) * 2;
+        if (k > Math.hypot(f[j], f[j + 1])) { f[j] = (tx / tl) * k; f[j + 1] = (ty / tl) * k; }
+      }
+    }
+  }
+
+  private smoothFlow() {
+    const f = this.flow, src = f.slice();
+    for (let gy = 1; gy < FG - 1; gy++) for (let gx = 1; gx < FG - 1; gx++) {
+      let sx = 0, sy = 0;
+      for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+        const w = (ox ? 1 : 2) * (oy ? 1 : 2), j = ((gy + oy) * FG + gx + ox) * 2;
+        sx += src[j] * w; sy += src[j + 1] * w;
+      }
+      const j = (gy * FG + gx) * 2;
+      f[j] = sx / 16; f[j + 1] = sy / 16;
+    }
   }
 
   private carveCircle(cx: number, cy: number, r: number) {
@@ -162,17 +233,20 @@ export class World {
     }
   }
 
-  private carveTunnel(a: { x: number; y: number }, b: { x: number; y: number }) {
+  private carveTunnel(a: { x: number; y: number }, b: { x: number; y: number }): { x: number; y: number }[] {
     const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy);
     const nx = -dy / len, ny = dx / len, seed = this.seed + Math.floor(a.x + b.y);
-    const steps = Math.ceil(len / 14);
+    const steps = Math.ceil(len / 14), spine: { x: number; y: number }[] = [];
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
       const env = Math.sin(Math.PI * t);                   // wiggle only mid-tunnel
       const off = (fbm(t * 3.1, 0.5, seed, 3) - 0.5) * 2 * 420 * env;
       const r = 62 + fbm(t * 6.3, 3.7, seed + 5, 2) * 70;
-      this.carveCircle(a.x + dx * t + nx * off, a.y + dy * t + ny * off, r);
+      const x = a.x + dx * t + nx * off, y = a.y + dy * t + ny * off;
+      this.carveCircle(x, y, r);
+      if (i % 3 === 0 || i === steps) spine.push({ x, y });
     }
+    return spine;
   }
 
   private flood() {

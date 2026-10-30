@@ -4,7 +4,7 @@
 //     visible only where the light map (or a Hum's sonar ring) reaches.
 //  3. Sprites: instanced quads for motes, sleepers and the Hush.
 
-import { WORLD, G } from './world';
+import { WORLD, G, FG } from './world';
 
 const QUAD_VS = `#version 300 es
 layout(location=0) in vec2 corner;
@@ -64,6 +64,19 @@ void main(){
     float rays = pow(abs(cos(ang * 3.0 + uTime * 0.25)), 24.0) + pow(abs(cos(ang * 5.0 - uTime * 0.17)), 40.0) * 0.6;
     float k = exp(-r * r * 40.0) * 2.0 + exp(-r * r * 6.0) * 0.4 + rays * exp(-r * 2.6) * 0.5;
     o = vec4(c * a * k * (1.0 - smoothstep(0.9, 1.0, r)), 1.0);
+  } else if (shape > 5.5) {     // 6: the listener, an absence that is all ear: rippling rims, no eyes (alpha blended)
+    float edge = 0.70 + 0.05 * sin(ang * 4.0 + uTime * 0.9 + seed) + 0.03 * sin(ang * 9.0 - uTime * 1.3);
+    float body = smoothstep(edge, edge - 0.36, r);
+    float alert = c.r;
+    float rip = 0.0;
+    for (int i = 0; i < 3; i++) {
+      float rr = fract(uTime * (0.25 + alert * 0.6) + float(i) / 3.0);
+      float rad = edge + rr * 0.28;
+      rip += (1.0 - smoothstep(0.0, 0.03, abs(r - rad))) * (1.0 - rr);
+    }
+    float rim = smoothstep(edge - 0.12, edge - 0.02, r) * smoothstep(edge + 0.04, edge - 0.02, r);
+    vec3 col = vec3(0.004, 0.003, 0.012) + vec3(0.30, 0.22, 0.60) * (rim * 0.6 + rip * (0.6 + alert * 0.9));
+    o = vec4(col, max(body, max(rim * 0.6, rip * (0.45 + alert * 0.5))) * a);
   } else {                      // 5: dormant sleeper glyph
     float ring = 1.0 - smoothstep(0.0, 0.035, abs(r - 0.62));
     float inner = 1.0 - smoothstep(0.0, 0.03, abs(r - 0.28 - 0.02 * sin(uTime * 1.3)));
@@ -80,13 +93,19 @@ void main(){ vec2 p = P[gl_VertexID]; vUv = p * 0.5 + 0.5; gl_Position = vec4(p,
 const WORLD_FS = `#version 300 es
 precision highp float;
 in vec2 vUv;
-uniform sampler2D uField; uniform sampler2D uLight;
+uniform sampler2D uField; uniform sampler2D uLight; uniform sampler2D uFlow; uniform float uTide;
 uniform vec2 uCam; uniform vec2 uView;
 uniform float uWorld; uniform float uTime; uniform float uLightScale; uniform float uAmbient;
 uniform vec4 uRing; uniform float uFade; uniform float uPxPerUnit;
 out vec4 o;
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 vec2 hash2(vec2 p){ return vec2(hash(p), hash(p + 19.19)); }
+float speckAt(vec2 p, float density){
+  vec2 g = p / 26.0;
+  vec2 id = floor(g); vec2 f = fract(g) - 0.5;
+  vec2 off = (hash2(id) - 0.5) * 0.7;
+  return smoothstep(0.09, 0.0, length(f - off)) * step(density, hash(id + 3.1));
+}
 void main(){
   vec2 wp = uCam + (vUv - 0.5) * uView * vec2(1.0, -1.0);
   float s = texture(uField, wp / uWorld).r;
@@ -121,12 +140,20 @@ void main(){
   col += vec3(0.80, 0.94, 0.90) * edge * (lum * 1.2 + ring * 0.9 + uAmbient * 2.0);
   col += lit * mix(vec3(0.16, 0.08, 0.06), vec3(0.05, 0.05, 0.07), rock);
 
-  // Marine snow: drifting specks only light can reveal.
-  vec2 g = wp / 26.0 + vec2(sin(uTime * 0.05) * 2.0, uTime * 0.22);
-  vec2 id = floor(g); vec2 f = fract(g) - 0.5;
-  vec2 off = (hash2(id) - 0.5) * 0.7;
-  float speck = smoothstep(0.09, 0.0, length(f - off)) * step(0.78, hash(id + 3.1));
+  // Marine snow: drifting specks only light can reveal. Inside a current they ride the water,
+  // advected with the classic two-phase flow-map trick, so the flow reads as streaming streaks.
+  vec2 flow = texture(uFlow, wp / uWorld).rg * uTide;
+  float fs = clamp(length(flow) / 170.0, 0.0, 1.0);
+  vec2 drift = vec2(sin(uTime * 0.05) * 52.0, uTime * 5.7);
+  float ph0 = fract(uTime * 0.45), ph1 = fract(uTime * 0.45 + 0.5);
+  float w0 = 1.0 - abs(1.0 - 2.0 * ph0);
+  float dens = mix(0.78, 0.55, fs);
+  float speck = speckAt(wp + drift - flow * ph0 * 2.2, dens) * w0 + speckAt(wp + drift - flow * ph1 * 2.2 + vec2(13.0, 7.0), dens) * (1.0 - w0);
+  // Trail each speck back along the flow so fast water draws lines, not dots.
+  speck += speckAt(wp + drift - flow * (ph0 * 2.2 - 0.06), dens) * w0 * fs * 0.6;
+  speck += speckAt(wp + drift - flow * (ph1 * 2.2 - 0.06) + vec2(13.0, 7.0), dens) * (1.0 - w0) * fs * 0.6;
   col += vec3(0.75, 0.85, 0.9) * speck * (lum * 0.9 + ring * 0.4 + 0.015) * (1.0 - rock);
+  col += vec3(0.05, 0.16, 0.17) * fs * (lum * 0.35 + 0.02) * (1.0 - rock);
 
   vec2 q = vUv - 0.5;
   col *= 1.0 - dot(q, q) * 0.85;
@@ -174,6 +201,8 @@ export class Renderer {
   private vao: WebGLVertexArrayObject; private inst: WebGLBuffer; private instBytes = 4096 * FLOATS * 4;
   private emptyVao: WebGLVertexArrayObject;
   private fieldTex: WebGLTexture;
+  private flowTex: WebGLTexture;
+  tide = 1;
   private lightTex: WebGLTexture | null = null; private lightFbo: WebGLFramebuffer | null = null;
   private lw = 0; private lh = 0;
   private lightScale = 1; private halfFloat: boolean;
@@ -211,6 +240,17 @@ export class Renderer {
     this.emptyVao = gl.createVertexArray()!;
 
     this.fieldTex = gl.createTexture()!;
+    this.flowTex = gl.createTexture()!;
+  }
+
+  uploadFlow(flow: Float32Array) {
+    const gl = this.gl;
+    gl.bindTexture(gl.TEXTURE_2D, this.flowTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG16F, FG, FG, 0, gl.RG, gl.FLOAT, flow);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   }
 
   uploadField(field: Float32Array) {
@@ -309,7 +349,9 @@ export class Renderer {
     gl.useProgram(p);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.fieldTex);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.lightTex);
-    gl.uniform1i(this.loc(p, 'uField'), 0); gl.uniform1i(this.loc(p, 'uLight'), 1);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.flowTex);
+    gl.uniform1i(this.loc(p, 'uField'), 0); gl.uniform1i(this.loc(p, 'uLight'), 1); gl.uniform1i(this.loc(p, 'uFlow'), 2);
+    gl.uniform1f(this.loc(p, 'uTide'), this.tide);
     gl.uniform2f(this.loc(p, 'uCam'), cam.x, cam.y);
     gl.uniform2f(this.loc(p, 'uView'), this.view.w, this.view.h);
     gl.uniform1f(this.loc(p, 'uWorld'), WORLD);

@@ -1,23 +1,13 @@
 // Game rules and the fixed-timestep simulation. Rendering reads interpolated state.
 
-import { World, WORLD, WALL, SLEEPER_COUNT, type Sleeper } from './world';
+import { World, WORLD, WALL, SLEEPER_COUNT, CURRENT_SPEED, tideAt, type Sleeper } from './world';
 import { Flock, collide, type Wick } from './flock';
-import { spawnHush, stepHush, type Hush, type HushContext } from './hush';
+import { spawnHush, stepHush, hearHum, reveal, HUM_STUN_R, type Hush, type HushKind, type HushContext } from './hush';
+import { poemFor, type Poem } from './poems';
 import { AudioEngine, VOICES } from './audio';
 import { Input } from './input';
 import { Renderer, type Camera } from './render';
 import { clamp, lerp, smoothstep } from './rng';
-
-export const POEM_TITLE = 'What the Small Lights Said';
-export const POEM = [
-  'Alone, I was a spark that thought it was the dark.',
-  'Then another answered, and the answer had a shape.',
-  'We learned the tunnels by the way they held our voices.',
-  'Nothing that listens is ever entirely lost.',
-  'The hush is only hungry. It was never cruel.',
-  'Each of us is small. That is not the same as little.',
-  'Look up. We were a sentence all along.',
-];
 
 export type Phase = 'title' | 'play' | 'paused' | 'dying' | 'ending' | 'done';
 
@@ -28,7 +18,10 @@ export interface GameEvents {
   ended(stats: Stats): void;
 }
 
-export interface Stats { time: number; gathered: number; lost: number; dims: number; peak: number }
+export interface Stats { time: number; gathered: number; lost: number; dims: number; peak: number; carried: number; unmasked: number }
+
+// Short-lived sparks for feedback: arrivals, bites, wakes and unmaskings.
+interface Spark { x: number; y: number; vx: number; vy: number; life: number; max: number; size: number; grow: number; shape: number; r: number; g: number; b: number; a: number }
 
 const DT = 1 / 60;
 const HUM_COOLDOWN = 1.1;
@@ -45,8 +38,16 @@ export class Game {
   cam: Camera;
   checkpoint: { x: number; y: number };
   lit = 0;
-  stats: Stats = { time: 0, gathered: 0, lost: 0, dims: 0, peak: 0 };
-  hum = { at: -99, x: 0, y: 0, cool: 0, echoed: new Set<Sleeper>() };
+  stats: Stats = { time: 0, gathered: 0, lost: 0, dims: 0, peak: 0, carried: 0, unmasked: 0 };
+  poem: Poem;
+  sparks: Spark[] = [];
+  tide = 1;
+  private flowTmp = { x: 0, y: 0 };
+  private moteTmp = { x: 0, y: 0, vx: 0, vy: 0 };
+  private wickFlow = 0;          // 0..1, how hard the current is pulling the wick right now
+  private mimicTellAcc = 0;
+  private trail: { x: number; y: number }[] = [];   // breadcrumbs of where the wick has been
+  hum = { at: -99, x: 0, y: 0, cool: 0, echoed: new Set<Sleeper>(), echoedHush: new Set<Hush>() };
   private dyingT = 0;
   private endingT = 0;
   private musicAcc = 0;
@@ -58,7 +59,9 @@ export class Game {
 
   constructor(seed: number, private r: Renderer, private audio: AudioEngine, private input: Input, private ev: GameEvents) {
     this.world = new World(seed);
+    this.poem = poemFor(seed);
     r.uploadField(this.world.field);
+    r.uploadFlow(this.world.flow);
     const s = this.world.start;
     this.wick = { x: s.x, y: s.y, vx: 0, vy: 0, px: s.x, py: s.y };
     this.checkpoint = { ...s };
@@ -66,7 +69,14 @@ export class Game {
     for (let i = 0; i < 6; i++) this.flock.add(s.x + (Math.random() - 0.5) * 60, s.y + (Math.random() - 0.5) * 60, VOICES[i % 4 + 2], -10);
     for (let i = 0; i < 5; i++) this.hush.push(spawnHush(this.world, s.x, s.y, 1700));
     this.hctx = {
-      wickX: 0, wickY: 0, loudness: 0,
+      wickX: 0, wickY: 0, loudness: 0, gathering: false,
+      onReveal: (h) => {
+        this.audio.sour(this.panOf(h.x));
+        this.burst(h.x, h.y, 10, 260, 0.6, 0.45, 0.9, 1.1, 3);
+        this.ring(h.x, h.y, 30, 260, 0.62, 0.45, 0.95, 0.9);
+        this.input.rumble(0.25, 0.5);
+        this.hint('mimic', 'That light was a Hush in disguise. A true lost light lights the stone around it. A false one lights nothing.');
+      },
       repel: (x, y, out) => {
         out.x = 0; out.y = 0;
         for (const sl of this.world.sleepers) {
@@ -105,10 +115,13 @@ export class Game {
     if (this.phase === 'play' || this.phase === 'dying') this.stats.time += dt;
     if (this.hintTimer > 0 && (this.hintTimer -= dt) <= 0) this.ev.hint(null);
     if (this.wakeFlash > 0) this.wakeFlash -= dt;
+    this.tide = tideAt(this.t);
+    this.updateSparks(dt);
 
     const gather = this.phase === 'play' && this.input.gather();
     this.moveWick(dt, gather);
-    this.flock.step(dt, this.world, this.wick, gather, this.t);
+    this.flock.step(dt, this.world, this.wick, gather, this.t, this.trail);
+    this.carryFlock(dt);
 
     if (this.phase === 'ending') { this.endingT += dt; if (this.endingT > 9 && this.phase === 'ending') { this.phase = 'done'; this.ev.ended(this.stats); } return; }
 
@@ -118,6 +131,7 @@ export class Game {
     this.updateHush(dt, gather);
     this.updateMusic(dt);
     this.audio.setMood(gather, this.danger);
+    this.audio.setFlow(this.wickFlow);
     this.stats.peak = Math.max(this.stats.peak, this.flock.n);
 
     if (this.phase === 'dying') {
@@ -126,6 +140,19 @@ export class Game {
     }
 
     if (this.t > 9) this.hint('strays', 'Lost lights drift in the dark. Pass close to gather them.');
+  }
+
+  // Currents carry the motes as well as the wick, so the whole murmuration streams with the water.
+  private carryFlock(dt: number) {
+    const f = this.flock, fl = this.flowTmp, k = this.tide * dt;
+    for (let i = 0; i < f.n; i++) {
+      this.world.flowAt(f.x[i], f.y[i], fl);
+      if (fl.x === 0 && fl.y === 0) continue;
+      const p = this.moteTmp;
+      p.x = f.x[i] + fl.x * k; p.y = f.y[i] + fl.y * k; p.vx = f.vx[i]; p.vy = f.vy[i];
+      collide(this.world, p, WALL - 0.04);
+      f.x[i] = p.x; f.y[i] = p.y; f.vx[i] = p.vx; f.vy[i] = p.vy;
+    }
   }
 
   private moveWick(dt: number, gather: boolean) {
@@ -144,8 +171,21 @@ export class Game {
     }
     const k = Math.min(1, dt * 5);
     w.vx += (gx - w.vx) * k; w.vy += (gy - w.vy) * k;
-    w.x += w.vx * dt; w.y += w.vy * dt;
+    // The water moves the wick on top of its own swimming: ride it and you fly, fight it and you crawl.
+    const fl = this.world.flowAt(w.x, w.y, this.flowTmp), cx = fl.x * this.tide, cy = fl.y * this.tide;
+    const cs = Math.hypot(cx, cy);
+    this.wickFlow = cs / CURRENT_SPEED;
+    w.x += (w.vx + cx) * dt; w.y += (w.vy + cy) * dt;
     collide(this.world, w, WALL - 0.1);
+    const last = this.trail[this.trail.length - 1];
+    if (!last || Math.hypot(w.x - last.x, w.y - last.y) > 36) {
+      this.trail.push({ x: w.x, y: w.y });
+      if (this.trail.length > 90) this.trail.shift();
+    }
+    if (this.phase === 'play') {
+      this.stats.carried += cs * dt;
+      if (this.wickFlow > 0.35) this.hint('current', `A current. Ride it to fly; lean into it to fight it. It breathes with the cave, so wait for the ebb if it is too strong.`);
+    }
   }
 
   private updateStrays(idle = false) {
@@ -162,6 +202,7 @@ export class Game {
         s.alive = false;
         const v = VOICES[Math.floor(Math.random() * VOICES.length)];
         f.add(s.x, s.y, v, this.t);
+        this.ring(s.x, s.y, 8, 70, 1.0, 0.85, 0.6, 0.6);
         this.stats.gathered++;
         this.audio.pluck(v, this.panOf(s.x), 0.22);
         this.ev.count(f.n);
@@ -196,18 +237,33 @@ export class Game {
           if (d > 500) this.audio.bell(s.lit ? 12 : 9, this.panOf(s.x) * 1.4, 0.05, d / 2400);
         }
       }
+      for (const hu of this.hush) {
+        if (h.echoedHush.has(hu)) continue;
+        const d = Math.hypot(hu.x - h.x, hu.y - h.y);
+        if (d >= r) continue;
+        h.echoedHush.add(hu);
+        if (hu.state === 'disguised') {
+          // Sonar sees through the costume: the false light has no body to echo from.
+          if (d < 900) { reveal(hu, this.hctx, true); this.stats.unmasked++; }
+        } else if (hu.kind === 'listener' && hearHum(hu, h.x, h.y)) {
+          this.audio.listen(this.panOf(hu.x), Math.min(0.5, d / 2400));
+          this.ring(hu.x, hu.y, 40, 340, 0.55, 0.45, 0.95, 0.7);
+          this.hint('listener', 'Something heard your Hum. It goes to where you sang, not to where you are. Move on.');
+        }
+      }
     }
   }
 
   private doHum() {
     const h = this.hum, w = this.wick, f = this.flock;
-    h.at = this.t; h.x = w.x; h.y = w.y; h.cool = HUM_COOLDOWN; h.echoed.clear();
+    h.at = this.t; h.x = w.x; h.y = w.y; h.cool = HUM_COOLDOWN; h.echoed.clear(); h.echoedHush.clear();
     const voices: number[] = [];
     for (let i = 0; i < f.n && voices.length < 6; i++) voices.push(f.voice[i]);
     this.audio.hum(voices);
     for (const hu of this.hush) {
+      if (hu.state === 'disguised') continue;
       const d = Math.hypot(hu.x - w.x, hu.y - w.y);
-      if (d < 560) { hu.state = 'stunned'; hu.stun = 3.2; }
+      if (d < HUM_STUN_R * (hu.kind === 'listener' ? 0.55 : 1)) { hearHum(hu, w.x, w.y); h.echoedHush.add(hu); }
     }
     for (const s of this.world.sleepers) {
       if (s.lit) continue;
@@ -228,8 +284,11 @@ export class Game {
     for (let i = 0; i < 3; i++) this.flock.add(s.x + (Math.random() - 0.5) * 40, s.y + (Math.random() - 0.5) * 40, VOICES[(s.order * 3 + i) % VOICES.length], this.t);
     this.stats.gathered += 3;
     this.ev.count(this.flock.n);
-    this.ev.poemLine(s.order, POEM[s.order]);
-    for (const hu of this.hush) if (Math.hypot(hu.x - s.x, hu.y - s.y) < 700) { hu.state = 'stunned'; hu.stun = 4; }
+    this.ev.poemLine(s.order, this.poem.lines[s.order]);
+    this.burst(s.x, s.y, 36, 420, 1.0, 0.75, 0.55, 2.2, 0);
+    this.ring(s.x, s.y, 60, 900, 1.0, 0.72, 0.6, 1.0);
+    this.input.rumble(0.35, 0.3);
+    for (const hu of this.hush) if (hu.state !== 'disguised' && Math.hypot(hu.x - s.x, hu.y - s.y) < 700) { hu.state = 'stunned'; hu.stun = 4; }
     if (this.lit >= SLEEPER_COUNT) { this.phase = 'ending'; this.endingT = 0; this.ev.hint(null); }
   }
 
@@ -237,14 +296,26 @@ export class Game {
     const f = this.flock, w = this.wick, ctx = this.hctx;
     ctx.wickX = w.x; ctx.wickY = w.y;
     ctx.loudness = gather ? 140 + f.n * 2 : Math.min(900, 260 + f.n * 9);
-    const want = 5 + this.lit * 2;
-    if (this.hush.length < want) this.hush.push(spawnHush(this.world, w.x, w.y, 1300));
+    ctx.gathering = gather;
+    // The cave grows warier as more of it wakes: listeners after the first sleeper, mimics after the second.
+    const lit = this.lit;
+    const want: Record<HushKind, number> = { drifter: 5 + lit, listener: lit >= 1 ? (lit >= 4 ? 2 : 1) : 0, mimic: lit >= 2 ? Math.min(4, lit) : 0 };
+    for (const kind of ['drifter', 'listener', 'mimic'] as HushKind[]) {
+      if (this.hush.filter((h) => h.kind === kind).length < want[kind]) this.hush.push(spawnHush(this.world, w.x, w.y, 1300, kind));
+    }
     let danger = 0;
+    this.mimicTellAcc += dt;
     for (const h of this.hush) {
       stepHush(h, dt, this.world, ctx, this.t);
       const dw = Math.hypot(h.x - w.x, h.y - w.y);
+      if (h.state === 'disguised') {
+        // The false light sings, very quietly, a note that is not in the series. Only the attentive will hear it.
+        if (dw < 650 && this.mimicTellAcc > 2.3) { this.mimicTellAcc = Math.random() * 0.8; this.audio.pluck(9.46, this.panOf(h.x), 0.05); }
+        continue;
+      }
       danger = Math.max(danger, smoothstep(520, 120, dw) * (h.state === 'stunned' ? 0.3 : 1));
       if (dw < 650) this.hint('hush', `Something is eating the light. To hide, ${this.ctl.gather} to draw in and dim. Hum to drive it off.`);
+      if (h.kind === 'listener' && dw < 600) this.hint('listener-seen', 'This Hush is all ear. It cannot see your light, but it hears every Hum from far away. Hum right beside it to scatter it.');
       if (h.state === 'stunned' || this.phase !== 'play') continue;
       if (h.bite <= 0 && f.n > 0) {
         const reach = h.size * 0.85, r2 = reach * reach;
@@ -256,6 +327,8 @@ export class Game {
         });
         if (victim >= 0) {
           this.audio.lose(f.voice[victim], this.panOf(f.x[victim]));
+          this.burst(f.x[victim], f.y[victim], 6, 90, 0.55, 0.4, 0.9, 0.7, 0, h.x, h.y);
+          this.input.rumble(0.12, 0.6);
           f.remove(victim);
           f.hash.build(f.x, f.y, f.n);
           h.size = Math.min(52, h.size + 1.1);
@@ -278,10 +351,11 @@ export class Game {
   private respawn() {
     const c = this.checkpoint, w = this.wick;
     w.x = w.px = c.x; w.y = w.py = c.y; w.vx = w.vy = 0;
+    this.trail.length = 0;
     this.flock.n = 0;
     for (let i = 0; i < 5; i++) this.flock.add(c.x + (Math.random() - 0.5) * 50, c.y + (Math.random() - 0.5) * 50, VOICES[i + 2], this.t);
     for (let i = 0; i < this.hush.length; i++) {
-      if (Math.hypot(this.hush[i].x - c.x, this.hush[i].y - c.y) < 900) this.hush[i] = spawnHush(this.world, c.x, c.y, 1300);
+      if (Math.hypot(this.hush[i].x - c.x, this.hush[i].y - c.y) < 900) this.hush[i] = spawnHush(this.world, c.x, c.y, 1300, this.hush[i].kind);
     }
     this.phase = 'play';
     this.ev.count(this.flock.n);
@@ -291,12 +365,36 @@ export class Game {
     // The flock murmurs: random members sing their partial, denser as it grows.
     const n = this.flock.n;
     if (!n) return;
-    this.musicAcc += dt * Math.min(3.2, 0.35 + n * 0.05);
+    this.musicAcc += dt * Math.min(3.2, 0.35 + n * 0.05) * (1 + this.wickFlow * 1.2);
     while (this.musicAcc > 1) {
       this.musicAcc -= 1 + Math.random() * 0.6;
       const i = Math.floor(Math.random() * n);
       const v = this.flock.voice[i];
       this.audio.pluck(v, this.panOf(this.flock.x[i]), 0.05 + Math.random() * 0.05, Math.random() < 0.2 ? 0.5 : 1);
+    }
+  }
+
+  // A spray of sparks. With a sink, they are pulled into it (a bite); without one they fly outward.
+  private burst(x: number, y: number, n: number, speed: number, r: number, g: number, b: number, life: number, shape: number, sinkX?: number, sinkY?: number) {
+    for (let i = 0; i < n && this.sparks.length < 400; i++) {
+      const a = Math.random() * Math.PI * 2, sp = speed * (0.3 + Math.random() * 0.7);
+      let vx = Math.cos(a) * sp, vy = Math.sin(a) * sp;
+      if (sinkX !== undefined && sinkY !== undefined) { vx = (sinkX - x) * 2.2 + vx * 0.3; vy = (sinkY - y) * 2.2 + vy * 0.3; }
+      this.sparks.push({ x, y, vx, vy, life: life * (0.6 + Math.random() * 0.4), max: life, size: shape === 3 ? 5 : 9, grow: 0, shape, r, g, b, a: 0.9 });
+    }
+  }
+
+  private ring(x: number, y: number, size: number, grow: number, r: number, g: number, b: number, a: number) {
+    if (this.sparks.length < 400) this.sparks.push({ x, y, vx: 0, vy: 0, life: 0.9, max: 0.9, size, grow, shape: 1, r, g, b, a });
+  }
+
+  private updateSparks(dt: number) {
+    const sp = this.sparks;
+    for (let i = sp.length - 1; i >= 0; i--) {
+      const p = sp[i];
+      p.life -= dt;
+      if (p.life <= 0) { sp[i] = sp[sp.length - 1]; sp.pop(); continue; }
+      p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.94; p.vy *= 0.94; p.size += p.grow * dt;
     }
   }
 
@@ -316,7 +414,8 @@ export class Game {
 
     // Camera
     const k = 1 - Math.exp(-frameDt * 3.2);
-    let tx = wx, ty = wy, tv = 980 + Math.sqrt(f.n) * 28;
+    // Lead the camera a little ahead of travel so you see where you are going, not where you were.
+    let tx = wx + w.vx * 0.32, ty = wy + w.vy * 0.32, tv = 980 + Math.sqrt(f.n) * 28;
     if (this.phase === 'title') { tx = this.world.start.x + Math.sin(t * 0.05) * 120; ty = this.world.start.y + Math.cos(t * 0.04) * 90; tv = 1250; }
     if (this.phase === 'ending' || this.phase === 'done') {
       const e = smoothstep(0.5, 7, this.endingT);
@@ -351,6 +450,7 @@ export class Game {
       }
     }
     for (const h of this.hush) {
+      if (h.state === 'disguised') continue;   // a false light neither lights nor darkens: it is not really there
       const x = lerp(h.px, h.x, alpha), y = lerp(h.py, h.y, alpha);
       if (on(x, y, 300)) r.shadows.push(x, y, h.size * 3.4, 0, 2.2, 2.2, 2.2, 1);
     }
@@ -395,7 +495,26 @@ export class Game {
     }
     for (const h of this.hush) {
       const x = lerp(h.px, h.x, alpha), y = lerp(h.py, h.y, alpha);
-      if (on(x, y, 100)) r.darks.push(x, y, h.size * 1.7, 2 + (h.seed % 1) * 0.9, 0, 0, 0, h.state === 'stunned' ? 0.55 : 0.97);
+      if (!on(x, y, 100)) continue;
+      if (h.state === 'disguised') {
+        // Dressed as a lost light: same warmth, same twinkle, but it casts nothing on the stone.
+        const tw = 0.6 + 0.4 * Math.sin(t * 3 + h.seed * 5);
+        r.glows.push(x, y, 11 * zoomOut, 0, 1.0, 0.86, 0.6, 0.55 * tw);
+        continue;
+      }
+      const a = h.state === 'stunned' ? 0.55 : 0.97, sf = (h.seed % 1) * 0.9;
+      if (h.kind === 'listener') r.darks.push(x, y, h.size * 1.9, 6 + sf, h.alert, 0, 0, a);
+      else r.darks.push(x, y, h.size * 1.7, 2 + sf, 0, 0, 0, a);
+      if (h.kind === 'mimic') {
+        // Unmasked, it still dangles its false light ahead of it, like an anglerfish.
+        const sp = Math.hypot(h.vx, h.vy) || 1, lx = x + (h.vx / sp) * h.size * 1.5, ly = y + (h.vy / sp) * h.size * 1.5 - 6;
+        r.glows.push(lx, ly, 13, 0, 0.95, 0.82, 0.7, 0.6 + 0.3 * Math.sin(t * 9));
+      }
+    }
+    for (const p of this.sparks) {
+      if (!on(p.x, p.y)) continue;
+      const k = p.life / p.max;
+      r.glows.push(p.x, p.y, p.size, p.shape, p.r, p.g, p.b, p.a * (p.shape === 1 ? k : Math.min(1, k * 1.6)));
     }
 
     // Edge echoes: where sleepers answered from beyond the screen.
@@ -437,6 +556,7 @@ export class Game {
     let ambient = 0.025 + (this.phase === 'title' ? 0.04 : 0);
     if (this.phase === 'ending' || this.phase === 'done') ambient += smoothstep(1, 7, this.endingT) * 0.12;
     const fade = this.phase === 'dying' ? clamp(1 - this.dyingT / 1.4, 0.04, 1) + clamp((this.dyingT - 1.6) / 0.6, 0, 1) : 1;
+    r.tide = this.tide;
     r.endFrame(this.cam, t, ring, ambient + this.wakeFlash * 0.02, clamp(fade, 0, 1));
   }
 }

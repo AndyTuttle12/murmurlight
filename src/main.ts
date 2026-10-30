@@ -3,10 +3,9 @@
 import { Renderer } from './render';
 import { AudioEngine } from './audio';
 import { Input } from './input';
-import { Game, POEM, POEM_TITLE, type Stats } from './game';
-import { SLEEPER_COUNT } from './world';
-
-const DEFAULT_SEED = 1077;
+import { Game, type Stats } from './game';
+import { SLEEPER_COUNT, WORLD } from './world';
+import { DEFAULT_SEED, constellationName, constellationSvg, loadGallery, saveConstellation } from './poems';
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
 function seedFromHash(): number {
@@ -30,6 +29,7 @@ const input = new Input(canvas);
 
 let poemShown: string[] = [];
 let lineTimer = 0;
+let countPulse = 0;
 
 const ui = {
   hint(text: string | null) {
@@ -47,7 +47,17 @@ const ui = {
     lineTimer = 6.5;
     renderWakes(i + 1);
   },
-  count(n: number) { $('count').textContent = String(n); },
+  count(n: number) {
+    const el = $('count'), box = el.parentElement!;
+    const prev = Number(el.textContent);
+    el.textContent = String(n);
+    if (n === prev) return;
+    box.classList.remove('up', 'down');
+    void box.offsetWidth;   // restart the pulse
+    box.classList.add(n > prev ? 'up' : 'down');
+    clearTimeout(countPulse);
+    countPulse = window.setTimeout(() => box.classList.remove('up', 'down'), 60);
+  },
   ended(stats: Stats) { showEnd(stats); },
 };
 
@@ -59,7 +69,7 @@ function renderWakes(n: number) {
 
 function fillPoem(ol: HTMLElement) {
   ol.innerHTML = '';
-  for (let i = 0; i < POEM.length; i++) {
+  for (let i = 0; i < game.poem.lines.length; i++) {
     const li = document.createElement('li');
     if (poemShown[i]) li.textContent = poemShown[i];
     else { li.textContent = '· · ·'; li.className = 'dark'; }
@@ -91,7 +101,7 @@ $('begin').addEventListener('click', () => {
 function setPaused(p: boolean) {
   if (p && game.phase === 'play') {
     game.phase = 'paused';
-    $('ptitle').textContent = POEM_TITLE;
+    $('ptitle').textContent = game.poem.title;
     fillPoem($('ppoem'));
     $('pause').hidden = false;
     audio.suspend();
@@ -123,25 +133,61 @@ window.addEventListener('pointerdown', (e) => { if (e.pointerType === 'touch') d
 function showEnd(stats: Stats) {
   $('hud').hidden = true;
   $('line').classList.remove('show');
-  $('etitle').textContent = POEM_TITLE;
+  $('etitle').textContent = game.poem.title;
   fillPoem($('epoem'));
-  const m = Math.floor(stats.time / 60), s = Math.floor(stats.time % 60);
   const rows: [string, string][] = [
-    ['Time', `${m}:${String(s).padStart(2, '0')}`],
+    ['Time', fmtTime(stats.time)],
     ['Lights gathered', String(stats.gathered)],
     ['Lost to the Hush', String(stats.lost)],
     ['Largest flock', String(stats.peak)],
     ['Times gone dark', String(stats.dims)],
+    ['Carried by currents', `${Math.round(stats.carried / 60)} fathoms`],
+    ['False lights unmasked', String(stats.unmasked)],
   ];
   const dl = $('stats'); dl.innerHTML = '';
   for (const [k, v] of rows) { const d = document.createElement('div'); d.innerHTML = `<dt>${k}</dt><dd>${v}</dd>`; dl.append(d); }
   $('seed').textContent = String(game.world.seed);
+  const seed = game.world.seed;
+  const points = [...game.world.sleepers].sort((a, b) => a.order - b.order).map((s) => [s.x / WORLD, s.y / WORLD] as [number, number]);
+  const entry = saveConstellation({ seed, name: constellationName(seed), poem: game.poem.title, points }, stats.time);
+  $('econst').innerHTML = constellationSvg(points, true);
+  $('ename').textContent = entry.name;
+  $('emeta').textContent = `Cave ${seed} · ${entry.runs > 1 ? `woken ${entry.runs} times · best ${fmtTime(entry.best)}` : 'added to your constellations'}`;
+  refreshGalleryButton();
   $('end').hidden = false;
   try {
     const best = Number(localStorage.getItem('murmurlight.best') || 0);
     if (!best || stats.time < best) localStorage.setItem('murmurlight.best', String(stats.time));
   } catch { /* storage may be unavailable */ }
 }
+
+function fmtTime(t: number) { return `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`; }
+
+// Gallery
+function refreshGalleryButton() {
+  const n = loadGallery().length;
+  for (const id of ['galbtn', 'egal']) { $(id).hidden = n === 0; $(id).textContent = `Constellations · ${n}`; }
+}
+function openGallery() {
+  const list = $('glist'); list.innerHTML = '';
+  for (const c of loadGallery()) {
+    const li = document.createElement('li');
+    const frame = document.createElement('div'); frame.className = 'frame'; frame.innerHTML = constellationSvg(c.points);
+    const name = document.createElement('p'); name.className = 'cname'; name.textContent = c.name;
+    const meta = document.createElement('p'); meta.className = 'cmeta';
+    meta.textContent = `Cave ${c.seed} · best ${fmtTime(c.best)}${c.runs > 1 ? ` · ${c.runs} runs` : ''}\n${c.poem}`;
+    meta.style.whiteSpace = 'pre-line';
+    const go = document.createElement('button'); go.className = 'icon-btn'; go.textContent = 'Return';
+    go.addEventListener('click', () => { audio.start(); $('gallery').hidden = true; $('title').hidden = true; newGame(c.seed); });
+    li.append(frame, name, meta, go);
+    list.append(li);
+  }
+  $('gallery').hidden = false;
+}
+$('galbtn').addEventListener('click', openGallery);
+$('egal').addEventListener('click', openGallery);
+$('galclose').addEventListener('click', () => { $('gallery').hidden = true; });
+refreshGalleryButton();
 
 // Main loop
 const STEP = 1 / 60;

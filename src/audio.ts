@@ -14,6 +14,8 @@ export class AudioEngine {
   private droneGain!: GainNode;
   private dangerGain!: GainNode;
   private dangerFilter!: BiquadFilterNode;
+  private flowGain!: GainNode;
+  private flowFilter!: BiquadFilterNode;
   private plucks = new Map<number, AudioBuffer>();
   muted = false;
 
@@ -72,6 +74,37 @@ export class AudioEngine {
     this.dangerGain = ctx.createGain(); this.dangerGain.gain.value = 0;
     ns.connect(this.dangerFilter); this.dangerFilter.connect(this.dangerGain); this.dangerGain.connect(this.filter);
     ns.start();
+
+    // Current: the same dark noise, band-passed higher, rushing past as the water carries you.
+    const fsrc = ctx.createBufferSource(); fsrc.buffer = nb; fsrc.loop = true; fsrc.playbackRate.value = 2.3;
+    this.flowFilter = ctx.createBiquadFilter(); this.flowFilter.type = 'bandpass'; this.flowFilter.frequency.value = 500; this.flowFilter.Q.value = 0.9;
+    this.flowGain = ctx.createGain(); this.flowGain.gain.value = 0;
+    fsrc.connect(this.flowFilter); this.flowFilter.connect(this.flowGain); this.flowGain.connect(this.filter); this.flowGain.connect(this.reverbIn);
+    fsrc.start();
+  }
+
+  // flow 0..1: how hard the current is pulling.
+  setFlow(flow: number) {
+    const c = this.ctx; if (!c) return;
+    this.flowGain.gain.setTargetAtTime(flow * flow * 0.5, c.currentTime, 0.4);
+    this.flowFilter.frequency.setTargetAtTime(350 + flow * 700, c.currentTime, 0.4);
+  }
+
+  // A mimic drops its costume: a bell struck on a partial that is not in the series, so it clangs against everything.
+  sour(pan = 0) {
+    const ctx = this.ctx; if (!ctx || this.muted) return;
+    this.bell(11.43, pan, 0.16);
+    this.bell(7.71, pan, 0.12, 0.04);
+  }
+
+  // A listener catches your Hum: a slow intake of breath, a low sine sliding up into it.
+  listen(pan = 0, delay = 0) {
+    const ctx = this.ctx; if (!ctx || this.muted) return;
+    const t = ctx.currentTime + delay;
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(F0 * 0.75, t); o.frequency.exponentialRampToValueAtTime(F0 * 1.5, t + 1.1);
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.22, t + 0.9); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.4);
+    o.connect(g); g.connect(this.out(pan, 0.9)); o.start(t); o.stop(t + 1.5);
   }
 
   setMuted(m: boolean) {

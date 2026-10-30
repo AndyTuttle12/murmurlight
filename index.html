@@ -81,6 +81,26 @@
   .stats dd { margin: 0; color: var(--ink); font-size: 1rem; font-variant-numeric: tabular-nums; }
   .row { display: flex; gap: 0.8rem; flex-wrap: wrap; }
   .credits { font-family: var(--mono); font-size: 0.64rem; color: var(--ink-dim); line-height: 1.9; }
+  .count strong { transition: color 0.4s, text-shadow 0.4s; }
+  .count.up strong { color: #fff4ec; text-shadow: 0 0 14px var(--coral); transition: none; }
+  .count.down strong { color: #b6a3e8; text-shadow: 0 0 14px #6b4fc9; transition: none; }
+
+  /* Constellations */
+  .const { width: 100%; height: 100%; display: block; overflow: visible; }
+  .const path { fill: none; stroke: var(--coral); stroke-width: 0.7; stroke-linecap: round; stroke-linejoin: round; opacity: 0.8; }
+  .const circle { fill: #ffe3d6; filter: drop-shadow(0 0 2px var(--coral)); }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+  .end-const { display: grid; grid-template-columns: 7.5rem 1fr; gap: 1.2rem; align-items: center; }
+  .end-const .frame { width: 7.5rem; height: 7.5rem; }
+  .cname { font-family: var(--caps); font-size: 1.15rem; letter-spacing: 0.08em; color: #f3ece6; margin: 0; }
+  .cmeta { font-family: var(--mono); font-size: 0.64rem; color: var(--ink-dim); letter-spacing: 0.08em; line-height: 1.8; margin: 0.2rem 0 0; }
+  #gallery .panel { max-width: 54rem; padding-right: 4vw; }
+  .glist { display: grid; grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr)); gap: 1rem; margin: 0; padding: 0; list-style: none; }
+  .glist li { border: 1px solid rgba(127, 154, 153, 0.22); border-radius: 14px; padding: 0.9rem; display: grid; gap: 0.5rem; background: rgba(3, 5, 11, 0.5); }
+  .glist .frame { aspect-ratio: 1; }
+  .glist .cname { font-size: 0.95rem; }
+  .glist button { justify-self: start; }
+  .row.title-row { align-items: center; }
   [hidden] { display: none !important; }
   #err { position: fixed; inset: 0; display: grid; place-items: center; text-align: center; padding: 2rem; font-family: var(--mono); font-size: 0.8rem; color: var(--ink-dim); }
   @media (prefers-reduced-motion: reduce) { #hint, #line { transition: none; } }
@@ -100,7 +120,10 @@
       <dt>Hum</dt><dd>right-click or Space (wakes sleepers, scares the Hush, calls back echoes)</dd>
       <dt>Pause</dt><dd>Esc</dd>
     </dl>
-    <button class="begin" id="begin">Begin</button>
+    <div class="row title-row">
+      <button class="begin" id="begin">Begin</button>
+      <button class="icon-btn" id="galbtn" hidden>Constellations</button>
+    </div>
     <span class="sig">A game by <b>Claude</b> &middot; code, sound, words and light &middot; best with headphones</span>
   </div>
 </section>
@@ -141,11 +164,26 @@
     <h2 id="etitle"></h2>
     <ol class="poem" id="epoem"></ol>
     <span class="poem-sig">&mdash; Claude</span>
+    <div class="end-const">
+      <div class="frame" id="econst"></div>
+      <div><p class="cname" id="ename"></p><p class="cmeta" id="emeta"></p></div>
+    </div>
     <dl class="stats" id="stats"></dl>
     <div class="row">
       <button class="begin" id="again">Another cave</button>
+      <button class="icon-btn" id="egal">Constellations</button>
     </div>
     <p class="credits">Murmurlight was designed, written, composed and programmed by Claude, an AI made by Anthropic. Every sound is synthesized live from one harmonic series; every wall is drawn from a single procedural field. Cave seed <span id="seed"></span>.</p>
+  </div>
+</section>
+
+<section id="gallery" class="layer sheet" hidden>
+  <div class="panel">
+    <span class="eyebrow">Constellations</span>
+    <h2>Caves you have woken</h2>
+    <p class="cmeta">Each cave's sleepers, joined in the order you woke them. Kept in this browser only.</p>
+    <ul class="glist" id="glist"></ul>
+    <div class="row"><button class="icon-btn" id="galclose">Close</button></div>
   </div>
 </section>
 

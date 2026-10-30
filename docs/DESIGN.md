@@ -57,9 +57,43 @@ There is no recorded audio. The soundtrack is the player's flock, so it is never
 
 The design tension is between seeing more and being seen. The player's main control (spread vs. draw in) is also the stealth control.
 
+### 4.1 Three kinds of Hush (polish pass)
+
+The first build had one Hush, and its only answer was "draw in, then Hum". Options weighed for adding depth:
+
+| Option | Notes |
+|---|---|
+| A faster chaser | More pressure, same answer. Rejected |
+| A Hush that splits when Hummed | Punishes the core verb with no counterplay |
+| A Hush that blocks tunnels | Reads as a door, not a creature |
+| A "seer" that hunts drawn-in flocks | Inverts the stealth rule, which is confusing more than deep |
+| **Mimic (picked)** | Waits disguised as a lost light and lunges when you come to gather it |
+| **Listener (picked)** | Ignores light, hears the Hum from 2600 units, and travels to where you sang |
+
+Each new kind answers a different verb, so each one asks a different question of the player:
+
+- **Drifter** (the original) hears brightness. Answer: draw in, or Hum.
+- **Mimic** exploits gathering. Its tells are fair and learnable. A real lost light lights the stone around it, and a false one lights nothing. It bobs in a perfect circle where real ones wander. Within earshot it plucks, very quietly, a note that is not in the harmonic series. A Hum's sonar ring unmasks any mimic within 900 units and stuns it. Unmasked, it still dangles its false light ahead of it like an anglerfish, and after nine seconds unseen it puts the costume back on somewhere else.
+- **Listener** exploits the Hum, the verb that answers every other threat. It is deaf to light and only hears a spread flock at point-blank range. When a Hum's ring reaches it, it inhales (a rising low tone), its ripples flare, and it travels to where you sang, lingers there and listens. The answer is to Hum and then move, or to Hum right beside it (inside about 300 units), which scatters it.
+
+The cave grows warier as it wakes. A listener arrives after the first sleeper, mimics after the second, and a second listener after the fourth. The total number of Hush is about the same as before; they are just more varied.
+
+Poem 4 ("The Hush, Considered") contains the mimic's tell as a line of verse, so a player who reads closely is told how to see through it.
+
 ## 5. Writing
 
 The poem "What the Small Lights Said" has seven lines, one per sleeper, revealed in the order you wake them. Hints are written in second person and kept to one sentence each. Nothing in the game is called a "level", "enemy" or "HP".
+
+## 5.1 More verses (polish pass)
+
+There are now six poems, each seven lines, and the cave seed chooses one: `(seed - 1077) mod 6`, so the original cave still sings the original poem. Each poem leans on one system, which means the words and the play rhyme:
+
+1. *What the Small Lights Said*: many small voices making one meaning (the original)
+2. *Tide Table for the Unlit*: the currents
+3. *Inventory of a Small Dark*: the Hum and its echoes
+4. *The Hush, Considered*: the mimic, with its tell hidden in lines 4 and 5
+5. *Letter Left in a Lantern-Stone*: the harmonic series, and a note to the player from Claude
+6. *Sounding*: the listener ("You call, and something hungry learns it too. So call when it matters. Then move.")
 
 ## 6. World design
 
@@ -70,6 +104,22 @@ A seeded procedural cave (`#cave-<seed>` in the URL):
 3. A minimum spanning tree plus a few loops is carved as wandering tunnels.
 4. A flood fill marks the reachable cells, and lost lights are scattered only there.
 5. Sleepers need 5, 8, 12, 17, 23, 30 and 38 lights, ordered by distance from the start, so difficulty rises the further you travel.
+6. Currents (polish pass) are generated last, after everything else has used the random stream, so every older seed keeps its cave, sleepers and strays exactly.
+
+### 6.1 Currents
+
+Options weighed: wind gusts (wrong medium), conveyor tiles (too gamey), whirlpools (hard to read as contour lines), one-way gates (a puzzle trope), and **tidal tunnel currents (picked)**.
+
+- About half the tunnels that do not touch home flow, and every cave has at least two. Tunnels from home stay still so the opening is calm.
+- Flow follows the tunnel's carved spine, strongest mid-tunnel, easing in and out at the ends. It is stored as a 128 by 128 velocity grid (32-unit cells), smoothed once and sampled bilinearly. The same grid is uploaded as an RG16F texture, so what you see and what pushes you are the same data, which is the same rule the walls follow.
+- The water adds to your swimming rather than replacing it. Peak flow is 170 units per second against a top swimming speed of 250 (165 when drawn in), so you can always fight a current at full spread, but a drawn-in flock crawls or is pushed back.
+- The whole cave breathes on one 14-second tide (flow from 20% to 100%). A current too strong to fight can be waited out until the ebb.
+- The motes are carried too, so the whole murmuration streams.
+- You see a current as marine snow riding the water, using the two-phase flow-map technique with a short trail behind each speck. You hear it as band-passed rushing noise that rises with the pull. Riding a current also quickens the flock's murmur.
+
+### 6.2 Constellation gallery
+
+When all seven sleepers wake, their positions in waking order are saved to `localStorage` per seed, with best time and run count. Each cave's constellation gets a deterministic name from its seed (*The Sevenfold Kite*, *The Quiet Oar*). The end screen draws it as an animated SVG line. A gallery on the title and end screens lists every cave woken in this browser, with a button to return to any of them.
 
 ## 7. Technical architecture
 
@@ -82,11 +132,13 @@ A seeded procedural cave (`#cave-<seed>` in the URL):
   3. Instanced sprites draw the rest.
 - **Input:** mouse, keyboard, touch (with on-screen buttons) and gamepad are unified into a move, a gather and a hum.
 - **Robustness:** a clear message when WebGL2 is unavailable, the game pauses when the tab is hidden, all storage access is wrapped in try/catch, and the device pixel ratio is capped at 2.
-- **Testing:** `window.__murmur()` exposes the game. A Playwright bot does a breadth-first-search pathfind over the field and plays a full run from start to ending headless.
+- **Testing:** `window.__murmur()` exposes the game. `npm run playtest` (after a build) runs `scripts/playtest.mjs`: a Playwright bot that drives the real Input object, plans with a breadth-first search over the reachability grid, steps the real fixed-timestep simulation faster than real time, and plays several seeds from start to ending. It then checks the end screen, the saved constellation, and that the gallery survives a reload. Any page error fails the run.
+- **Flock pathing (polish pass):** the wick leaves breadcrumbs every 36 units. A mote that falls far behind follows the trail instead of pulling straight at the wick, so the murmuration flows around corners rather than snagging on thin walls.
+- **Feedback (polish pass):** a small spark pool (capped at 400) for arrivals, bites (sparks pulled into the Hush), wakes and unmaskings. The camera leads in the direction of travel. The light counter flashes warm on a gain and violet on a loss. Gamepads rumble and phones buzz on bites, wakes and unmaskings (best effort).
 
 ## 8. Next steps
 
-- Currents: tunnels with flow you can ride, or fight against.
-- More Hush behaviors: one that mimics a stray light, and one that follows sound echoes.
-- A persistent "constellation" gallery showing the shape each seed's sleepers make.
+- Done in the polish pass: currents, the mimic and the listener, the constellation gallery, six poems, and flock trail-following.
+- A daily cave: one shared seed per day, so a gallery doubles as a calendar.
+- Sleepers that need a chord (motes of specific partials), not just a count.
 - Desktop builds via Tauri if a downloadable version is wanted.

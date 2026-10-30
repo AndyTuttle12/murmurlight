@@ -77,7 +77,9 @@ export class Flock {
     this.px[i] = this.px[j]; this.py[i] = this.py[j]; this.voice[i] = this.voice[j]; this.born[i] = this.born[j];
   }
 
-  step(dt: number, world: World, wick: Wick, gather: boolean, t: number) {
+  // trail: recent wick positions, oldest first. Motes that fall far behind follow it instead of
+  // pulling straight at the wick, so the murmuration flows around corners rather than snagging on them.
+  step(dt: number, world: World, wick: Wick, gather: boolean, t: number, trail: { x: number; y: number }[] = []) {
     const n = this.n, X = this.x, Y = this.y, VX = this.vx, VY = this.vy;
     this.hash.build(X, Y, n);
     const sq = Math.sqrt(n);
@@ -104,7 +106,18 @@ export class Flock {
         fy += (ay / cnt - VY[i]) * 1.4 + (cy / cnt) * 1.2;
       }
       // Orbit the wick: spring toward a ring plus a tangential swirl.
-      const dx = wick.x - xi, dy = wick.y - yi, d = Math.hypot(dx, dy) + 1e-3;
+      let dx = wick.x - xi, dy = wick.y - yi, d = Math.hypot(dx, dy) + 1e-3;
+      if (d > ring * 2 + 160 && trail.length > 2) {
+        let best = 0, bd = Infinity;
+        for (let k = 0; k < trail.length; k++) {
+          const q = trail[k], e = (q.x - xi) * (q.x - xi) + (q.y - yi) * (q.y - yi);
+          if (e < bd) { bd = e; best = k; }
+        }
+        const q = trail[Math.min(trail.length - 1, best + 2)];
+        const ex = q.x - xi, ey = q.y - yi, el = Math.hypot(ex, ey) + 1e-3;
+        // Keep the spring strength of the true distance, but point it along the trail.
+        dx = (ex / el) * d; dy = (ey / el) * d;
+      }
       const ux = dx / d, uy = dy / d;
       const pull = clamp((d - ring) / ring, -0.6, 4) * (gather ? 700 : 380);
       fx += ux * pull - uy * swirl * (i % 5 === 0 ? -0.6 : 1);

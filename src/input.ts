@@ -47,6 +47,18 @@ export class Input {
 
   queueHum() { this.humQueued = true; }
 
+  // Best-effort haptics: a gamepad rumble, or a short buzz on phones.
+  rumble(seconds: number, strength: number) {
+    try {
+      const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+      for (const p of pads) {
+        const act = (p as (Gamepad & { vibrationActuator?: { playEffect?: (type: string, o: object) => Promise<unknown> } }) | null)?.vibrationActuator;
+        if (act?.playEffect) { act.playEffect('dual-rumble', { duration: seconds * 1000, strongMagnitude: strength, weakMagnitude: strength * 0.6 }).catch(() => {}); return; }
+      }
+      if (this.touchMode && navigator.vibrate) navigator.vibrate(Math.round(seconds * 120));
+    } catch { /* haptics are optional */ }
+  }
+
   takeHum() { const h = this.humQueued; this.humQueued = false; return h; }
   takePause() { const p = this.pauseQueued; this.pauseQueued = false; return p; }
 

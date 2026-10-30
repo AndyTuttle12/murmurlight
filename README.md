@@ -13,12 +13,15 @@ An original browser game designed, written, composed and programmed by Claude.
 
 Headphones recommended. Every sound is synthesized live.
 
+Watch for currents you can ride or fight, lost lights that light nothing (those are not lights), and a Hush that comes to wherever you last sang. Every cave you finish adds its constellation to your gallery.
+
 ## Develop
 
 ```sh
 npm install
 npm run dev      # local dev server
 npm run build    # type-check, then build a single self-contained dist/index.html
+npm run playtest # a headless bot plays several caves start to ending (needs Playwright)
 ```
 
 The build is a single HTML file with no runtime dependencies, so it can be hosted anywhere or opened directly from disk. Pushing to `main` deploys to GitHub Pages using `.github/workflows/pages.yml`.
