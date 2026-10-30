@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Murmurlight</title>
+<meta name="description" content="Lead a murmuration of small lights through a dark sea cave. A game by Claude.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,300;1,300;1,400&family=Spectral+SC:wght@300&family=Martian+Mono:wght@300;400&display=swap">
+<style>
+  /* Layout: the cave fills the screen; text sits low-left like a field note held up to the dark. */
+  :root {
+    --abyss: #03050b;
+    --ink: #d9e4e2;
+    --ink-dim: #7f9a99;
+    --coral: #e58a68;
+    --sonar: #6fc9bd;
+    --veil: rgba(3, 5, 11, 0.72);
+    --serif: 'Spectral', 'Iowan Old Style', Georgia, serif;
+    --caps: 'Spectral SC', 'Spectral', Georgia, serif;
+    --mono: 'Martian Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    color-scheme: dark;
+  }
+  html, body { height: 100%; margin: 0; background: var(--abyss); color: var(--ink); overflow: hidden; }
+  body { font-family: var(--serif); -webkit-font-smoothing: antialiased; touch-action: none; user-select: none; -webkit-user-select: none; }
+  #c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
+  .layer { position: fixed; inset: 0; pointer-events: none; padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left)); }
+  .panel { pointer-events: auto; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  button:focus-visible { outline: 1px solid var(--sonar); outline-offset: 4px; }
+
+  /* Title */
+  #title { display: flex; flex-direction: column; justify-content: flex-end; background: linear-gradient(to top, var(--veil), transparent 60%); }
+  #title .panel { max-width: 34rem; display: grid; gap: 1.1rem; padding-bottom: 4vh; padding-left: 2vw; }
+  .eyebrow { font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.22em; text-transform: uppercase; color: var(--sonar); }
+  h1 { font-family: var(--caps); font-weight: 300; font-size: clamp(2.6rem, 8vw, 5.4rem); letter-spacing: 0.14em; margin: 0; line-height: 1; color: #f3ece6; text-shadow: 0 0 40px rgba(229, 138, 104, 0.35); }
+  .lede { font-style: italic; font-size: clamp(1.05rem, 2.2vw, 1.3rem); line-height: 1.5; color: var(--ink); margin: 0; max-width: 30rem; }
+  .controls { font-family: var(--mono); font-size: 0.7rem; line-height: 2; color: var(--ink-dim); display: grid; grid-template-columns: auto 1fr; gap: 0 1.2rem; margin: 0; }
+  .controls dt { color: var(--ink); }
+  .controls dd { margin: 0; }
+  .begin { justify-self: start; background: none; border: 1px solid var(--coral); color: #ffe9df; padding: 0.8rem 2.2rem; font-family: var(--mono); font-size: 0.78rem; letter-spacing: 0.25em; text-transform: uppercase; border-radius: 999px; transition: background 0.3s, box-shadow 0.3s; }
+  .begin:hover, .begin:focus-visible { background: rgba(229, 138, 104, 0.14); box-shadow: 0 0 30px rgba(229, 138, 104, 0.35); }
+  .sig { font-family: var(--mono); font-size: 0.64rem; color: var(--ink-dim); letter-spacing: 0.08em; }
+  .sig b { color: var(--coral); font-weight: 400; }
+
+  /* HUD */
+  #hud { display: flex; flex-direction: column; justify-content: space-between; }
+  .hud-top { display: flex; justify-content: space-between; align-items: flex-start; font-family: var(--mono); font-size: 0.7rem; color: var(--ink-dim); letter-spacing: 0.12em; }
+  .count { display: flex; align-items: baseline; gap: 0.5rem; }
+  .count strong { font-size: 1.35rem; font-weight: 300; color: #ffd9c9; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+  .wakes { display: flex; gap: 6px; align-items: center; }
+  .wakes i { width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--ink-dim); display: block; }
+  .wakes i.on { background: var(--coral); border-color: var(--coral); box-shadow: 0 0 8px var(--coral); }
+  .hud-icons { display: flex; gap: 0.6rem; }
+  .icon-btn { pointer-events: auto; background: none; border: 1px solid rgba(127, 154, 153, 0.35); border-radius: 999px; padding: 0.35rem 0.8rem; font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.15em; color: var(--ink-dim); text-transform: uppercase; }
+  .icon-btn:hover { color: var(--ink); border-color: var(--ink-dim); }
+  #hint { align-self: center; text-align: center; font-family: var(--mono); font-size: 0.74rem; color: var(--ink); letter-spacing: 0.04em; max-width: 46rem; line-height: 1.7; opacity: 0; transition: opacity 0.8s; margin-bottom: 0.5rem; text-shadow: 0 0 12px var(--abyss); }
+  #hint.show { opacity: 0.92; }
+  #line { position: fixed; left: 0; right: 0; top: 30%; text-align: center; font-style: italic; font-size: clamp(1.3rem, 3.2vw, 2.1rem); font-weight: 300; color: #fff1ea; opacity: 0; transition: opacity 1.6s; padding-inline: max(20px, env(safe-area-inset-left)); text-shadow: 0 0 30px rgba(229, 138, 104, 0.6), 0 0 6px var(--abyss); text-wrap: balance; }
+  #line.show { opacity: 1; }
+  #line small { display: block; font-style: normal; font-family: var(--mono); font-size: 0.65rem; letter-spacing: 0.3em; color: var(--coral); margin-bottom: 0.9rem; }
+
+  /* Touch */
+  #touch { display: none; position: fixed; right: max(18px, env(safe-area-inset-right)); bottom: max(18px, env(safe-area-inset-bottom)); gap: 14px; pointer-events: auto; }
+  #touch button { width: 76px; height: 76px; border-radius: 50%; background: rgba(3, 5, 11, 0.5); border: 1px solid var(--sonar); color: var(--sonar); font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.15em; }
+  #touch button.hold { border-color: var(--coral); color: var(--coral); }
+  body.touch #touch { display: flex; }
+
+  /* Pause and end */
+  .sheet { display: flex; align-items: center; justify-content: flex-start; background: var(--veil); backdrop-filter: blur(3px); }
+  .sheet .panel { max-width: 36rem; display: grid; gap: 1.2rem; padding-left: 4vw; max-height: 100%; overflow-y: auto; }
+  h2 { font-family: var(--caps); font-weight: 300; letter-spacing: 0.12em; font-size: clamp(1.5rem, 4vw, 2.2rem); margin: 0; color: #f3ece6; }
+  .poem { font-style: italic; font-size: clamp(1.05rem, 2.4vw, 1.3rem); line-height: 1.75; margin: 0; padding: 0; list-style: none; }
+  .poem li.dark { color: #33424a; font-style: normal; letter-spacing: 0.4em; }
+  .poem-sig { font-family: var(--mono); font-size: 0.7rem; color: var(--coral); letter-spacing: 0.1em; }
+  .stats { font-family: var(--mono); font-size: 0.72rem; color: var(--ink-dim); display: grid; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); gap: 0.8rem; margin: 0; }
+  .stats div { display: grid; gap: 0.2rem; }
+  .stats dt { font-size: 0.6rem; letter-spacing: 0.18em; text-transform: uppercase; }
+  .stats dd { margin: 0; color: var(--ink); font-size: 1rem; font-variant-numeric: tabular-nums; }
+  .row { display: flex; gap: 0.8rem; flex-wrap: wrap; }
+  .credits { font-family: var(--mono); font-size: 0.64rem; color: var(--ink-dim); line-height: 1.9; }
+  [hidden] { display: none !important; }
+  #err { position: fixed; inset: 0; display: grid; place-items: center; text-align: center; padding: 2rem; font-family: var(--mono); font-size: 0.8rem; color: var(--ink-dim); }
+  @media (prefers-reduced-motion: reduce) { #hint, #line { transition: none; } }
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="Murmurlight game view"></canvas>
+
+<section id="title" class="layer">
+  <div class="panel">
+    <span class="eyebrow">Seven sleepers &middot; one dark sea</span>
+    <h1>Murmurlight</h1>
+    <p class="lede">You are the first small light in a drowned cave. Gather the lost ones, wake the seven sleepers, and keep your murmuration away from the Hush.</p>
+    <dl class="controls">
+      <dt>Move</dt><dd>mouse, WASD, or drag</dd>
+      <dt>Draw in</dt><dd>hold left-click or Shift (dimmer, quieter, slower)</dd>
+      <dt>Hum</dt><dd>right-click or Space (wakes sleepers, scares the Hush, calls back echoes)</dd>
+      <dt>Pause</dt><dd>Esc</dd>
+    </dl>
+    <button class="begin" id="begin">Begin</button>
+    <span class="sig">A game by <b>Claude</b> &middot; code, sound, words and light &middot; best with headphones</span>
+  </div>
+</section>
+
+<section id="hud" class="layer" hidden>
+  <div class="hud-top">
+    <div class="count"><strong id="count">6</strong><span>LIGHTS</span></div>
+    <div class="wakes" id="wakes" aria-label="Sleepers woken"></div>
+    <div class="hud-icons">
+      <button class="icon-btn" id="mute" aria-pressed="false">Sound on</button>
+      <button class="icon-btn" id="pausebtn">Pause</button>
+    </div>
+  </div>
+  <div id="hint" role="status"></div>
+</section>
+<div id="line" aria-live="polite"></div>
+
+<div id="touch">
+  <button id="t-gather">DRAW IN</button>
+  <button id="t-hum">HUM</button>
+</div>
+
+<section id="pause" class="layer sheet" hidden>
+  <div class="panel">
+    <span class="eyebrow">Paused</span>
+    <h2 id="ptitle"></h2>
+    <ol class="poem" id="ppoem"></ol>
+    <div class="row">
+      <button class="begin" id="resume">Resume</button>
+      <button class="icon-btn" id="newcave">New cave</button>
+    </div>
+  </div>
+</section>
+
+<section id="end" class="layer sheet" hidden>
+  <div class="panel">
+    <span class="eyebrow">All seven are awake</span>
+    <h2 id="etitle"></h2>
+    <ol class="poem" id="epoem"></ol>
+    <span class="poem-sig">&mdash; Claude</span>
+    <dl class="stats" id="stats"></dl>
+    <div class="row">
+      <button class="begin" id="again">Another cave</button>
+    </div>
+    <p class="credits">Murmurlight was designed, written, composed and programmed by Claude, an AI made by Anthropic. Every sound is synthesized live from one harmonic series; every wall is drawn from a single procedural field. Cave seed <span id="seed"></span>.</p>
+  </div>
+</section>
+
+<div id="err" hidden></div>
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>

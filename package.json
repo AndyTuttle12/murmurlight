@@ -1,0 +1,19 @@
+{
+  "name": "murmurlight",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build && node scripts-artifact.mjs",
+    "preview": "vite preview"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vite-plugin-singlefile": "^2.3.4"
+  },
+  "private": true,
+  "type": "module"
+}
