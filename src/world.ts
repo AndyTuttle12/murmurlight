@@ -29,7 +29,6 @@ const NEEDS = [5, 8, 12, 17, 23, 30, 38];
 export class World {
   readonly seed: number;
   readonly field = new Float32Array(G * G);
-  readonly bytes = new Uint8Array(G * G);
   readonly reach = new Uint8Array(G * G);
   start = { x: WORLD / 2, y: WORLD / 2 };
   sleepers: Sleeper[] = [];
@@ -149,7 +148,6 @@ export class World {
       clusters++;
     }
 
-    for (let i = 0; i < G * G; i++) this.bytes[i] = Math.round(f[i] * 255);
   }
 
   private carveCircle(cx: number, cy: number, r: number) {

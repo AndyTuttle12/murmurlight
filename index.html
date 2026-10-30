@@ -53,7 +53,7 @@
   .wakes i { width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--ink-dim); display: block; }
   .wakes i.on { background: var(--coral); border-color: var(--coral); box-shadow: 0 0 8px var(--coral); }
   .hud-icons { display: flex; gap: 0.6rem; }
-  .icon-btn { pointer-events: auto; background: none; border: 1px solid rgba(127, 154, 153, 0.35); border-radius: 999px; padding: 0.35rem 0.8rem; font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.15em; color: var(--ink-dim); text-transform: uppercase; }
+  .icon-btn { white-space: nowrap; pointer-events: auto; background: none; border: 1px solid rgba(127, 154, 153, 0.35); border-radius: 999px; padding: 0.35rem 0.8rem; font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.15em; color: var(--ink-dim); text-transform: uppercase; }
   .icon-btn:hover { color: var(--ink); border-color: var(--ink-dim); }
   #hint { align-self: center; text-align: center; font-family: var(--mono); font-size: 0.74rem; color: var(--ink); letter-spacing: 0.04em; max-width: 46rem; line-height: 1.7; opacity: 0; transition: opacity 0.8s; margin-bottom: 0.5rem; text-shadow: 0 0 12px var(--abyss); }
   #hint.show { opacity: 0.92; }
@@ -66,6 +66,7 @@
   #touch button { width: 76px; height: 76px; border-radius: 50%; background: rgba(3, 5, 11, 0.5); border: 1px solid var(--sonar); color: var(--sonar); font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.15em; }
   #touch button.hold { border-color: var(--coral); color: var(--coral); }
   body.touch #touch { display: flex; }
+  @media (max-width: 520px) { .hud-top { flex-wrap: wrap; gap: 0.6rem; } .wakes { order: 3; flex-basis: 100%; } .icon-btn { padding: 0.3rem 0.6rem; } }
 
   /* Pause and end */
   .sheet { display: flex; align-items: center; justify-content: flex-start; background: var(--veil); backdrop-filter: blur(3px); }

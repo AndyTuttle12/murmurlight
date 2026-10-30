@@ -83,7 +83,7 @@ in vec2 vUv;
 uniform sampler2D uField; uniform sampler2D uLight;
 uniform vec2 uCam; uniform vec2 uView;
 uniform float uWorld; uniform float uTime; uniform float uLightScale; uniform float uAmbient;
-uniform vec4 uRing; uniform float uFade;
+uniform vec4 uRing; uniform float uFade; uniform float uPxPerUnit;
 out vec4 o;
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 vec2 hash2(vec2 p){ return vec2(hash(p), hash(p + 19.19)); }
@@ -103,8 +103,14 @@ void main(){
   float rock = smoothstep(0.485, 0.515, s);
   float k = s * 15.0;
   float fr = fract(k);
-  float contour = 1.0 - smoothstep(0.5, 1.4, min(fr, 1.0 - fr) / max(fwidth(k), 1e-4));
-  float edge = 1.0 - smoothstep(0.6, 2.2, abs(s - 0.5) / max(fwidth(s), 1e-5));
+  // Analytic screen-space distance from the field gradient: steady line widths, no derivative-quad jaggies.
+  vec2 e = vec2(4.0, 0.0);
+  float gx = texture(uField, (wp + e.xy) / uWorld).r - texture(uField, (wp - e.xy) / uWorld).r;
+  float gy = texture(uField, (wp + e.yx) / uWorld).r - texture(uField, (wp - e.yx) / uWorld).r;
+  float grad = max(length(vec2(gx, gy)) / 8.0, 1e-6) / uPxPerUnit;   // field change per pixel
+  float contour = 1.0 - smoothstep(0.45, 1.3, min(fr, 1.0 - fr) / 15.0 / grad);
+  contour *= smoothstep(0.995, 0.96, s) * smoothstep(0.005, 0.04, s); // clamped plateaus are not contours
+  float edge = 1.0 - smoothstep(0.7, 2.2, abs(s - 0.5) / grad);
 
   vec3 water = vec3(0.010, 0.016, 0.032);
   vec3 stone = vec3(0.022, 0.026, 0.044);
@@ -165,7 +171,7 @@ export class Renderer {
   readonly gl: WebGL2RenderingContext;
   readonly canvas: HTMLCanvasElement;
   private lightProg: WebGLProgram; private spriteProg: WebGLProgram; private worldProg: WebGLProgram;
-  private vao: WebGLVertexArrayObject; private inst: WebGLBuffer;
+  private vao: WebGLVertexArrayObject; private inst: WebGLBuffer; private instBytes = 4096 * FLOATS * 4;
   private emptyVao: WebGLVertexArrayObject;
   private fieldTex: WebGLTexture;
   private lightTex: WebGLTexture | null = null; private lightFbo: WebGLFramebuffer | null = null;
@@ -198,7 +204,7 @@ export class Renderer {
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     this.inst = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.inst);
-    gl.bufferData(gl.ARRAY_BUFFER, 4096 * FLOATS * 4, gl.DYNAMIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, this.instBytes, gl.DYNAMIC_DRAW);
     gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, FLOATS * 4, 0); gl.vertexAttribDivisor(1, 1);
     gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.FLOAT, false, FLOATS * 4, 16); gl.vertexAttribDivisor(2, 1);
     gl.bindVertexArray(null);
@@ -207,11 +213,11 @@ export class Renderer {
     this.fieldTex = gl.createTexture()!;
   }
 
-  uploadField(bytes: Uint8Array) {
+  uploadField(field: Float32Array) {
     const gl = this.gl;
     gl.bindTexture(gl.TEXTURE_2D, this.fieldTex);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, G, G, 0, gl.RED, gl.UNSIGNED_BYTE, bytes);
+    // R16F keeps the wall threshold smooth (8-bit steps show up as blocky contour seams).
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, G, G, 0, gl.RED, gl.FLOAT, field);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -274,7 +280,7 @@ export class Renderer {
     gl.bindVertexArray(this.vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.inst);
     const bytes = b.n * FLOATS * 4;
-    if (bytes > gl.getBufferParameter(gl.ARRAY_BUFFER, gl.BUFFER_SIZE)) gl.bufferData(gl.ARRAY_BUFFER, bytes * 2, gl.DYNAMIC_DRAW);
+    if (bytes > this.instBytes) { this.instBytes = bytes * 2; gl.bufferData(gl.ARRAY_BUFFER, this.instBytes, gl.DYNAMIC_DRAW); }
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, b.data, 0, b.n * FLOATS);
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, b.n);
   }
@@ -311,6 +317,7 @@ export class Renderer {
     gl.uniform1f(this.loc(p, 'uLightScale'), this.lightScale);
     gl.uniform1f(this.loc(p, 'uAmbient'), ambient);
     gl.uniform1f(this.loc(p, 'uFade'), fade);
+    gl.uniform1f(this.loc(p, 'uPxPerUnit'), this.canvas.height / this.view.h);
     gl.uniform4f(this.loc(p, 'uRing'), ring[0], ring[1], ring[2], ring[3]);
     gl.bindVertexArray(this.emptyVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);

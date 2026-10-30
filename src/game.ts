@@ -58,7 +58,7 @@ export class Game {
 
   constructor(seed: number, private r: Renderer, private audio: AudioEngine, private input: Input, private ev: GameEvents) {
     this.world = new World(seed);
-    r.uploadField(this.world.bytes);
+    r.uploadField(this.world.field);
     const s = this.world.start;
     this.wick = { x: s.x, y: s.y, vx: 0, vy: 0, px: s.x, py: s.y };
     this.checkpoint = { ...s };
@@ -82,6 +82,12 @@ export class Game {
   }
 
   begin() { this.phase = 'play'; this.hint('lead', this.input.touchMode ? 'Drag to lead. Your lights follow you.' : 'Move the mouse (or WASD) to lead. Your lights follow you.'); }
+
+  private get ctl() {
+    return this.input.touchMode
+      ? { gather: 'hold Draw In', hum: 'tap Hum' }
+      : { gather: 'hold left-click (or Shift)', hum: 'right-click or Space' };
+  }
 
   private hint(key: string, text: string, force = false) {
     if (this.hintsShown.has(key) && !force) return;
@@ -169,7 +175,7 @@ export class Game {
       const d = Math.hypot(s.x - this.wick.x, s.y - this.wick.y);
       s.near = d < 900 ? this.flock.countNear(s.x, s.y, LISTEN_R) : 0;
       if (!s.lit && d < 420) {
-        if (this.lit === 0) this.hint('sleeper', `A sleeper. Bring ${s.need} lights close to it, then Hum (Space or right-click).`);
+        if (this.lit === 0) this.hint('sleeper', `A sleeper. Bring ${s.need} lights close to it, then Hum (${this.ctl.hum}).`);
         else if (s.near >= s.need) this.hint('ready' + s.need, 'It is listening. Hum to wake it.', true);
       }
     }
@@ -208,7 +214,7 @@ export class Game {
       const d = Math.hypot(s.x - w.x, s.y - w.y);
       if (d > 330) continue;
       if (s.near >= s.need) this.wake(s);
-      else this.hint('short' + s.need + ':' + s.near, `It stirs, but needs ${s.need} lights close. You brought ${s.near}.`, true);
+      else this.hint('short' + s.need + ':' + s.near, `It stirs, but needs ${s.need} lights close and you brought ${s.near}. Gather more, or draw in tight beside it.`, true);
     }
     if (this.lit >= 1) this.hint('sonar', 'Your Hum carries. Sleepers answer from the edge of the dark.');
   }
@@ -238,7 +244,7 @@ export class Game {
       stepHush(h, dt, this.world, ctx, this.t);
       const dw = Math.hypot(h.x - w.x, h.y - w.y);
       danger = Math.max(danger, smoothstep(520, 120, dw) * (h.state === 'stunned' ? 0.3 : 1));
-      if (dw < 650) this.hint('hush', 'Something is eating the light. Hold left-click (or Shift) to draw in and dim. Hum to drive it off.');
+      if (dw < 650) this.hint('hush', `Something is eating the light. To hide, ${this.ctl.gather} to draw in and dim. Hum to drive it off.`);
       if (h.state === 'stunned' || this.phase !== 'play') continue;
       if (h.bite <= 0 && f.n > 0) {
         const reach = h.size * 0.85, r2 = reach * reach;
